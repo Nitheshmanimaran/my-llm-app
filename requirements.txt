@@ -4,3 +4,4 @@ pymongo
 langchain
 PyPDF2
 replicate
+docx2txt
