@@ -3,3 +3,4 @@ pinecone
 pymongo
 langchain
 PyPDF2
+replicate
