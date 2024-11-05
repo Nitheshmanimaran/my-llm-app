@@ -10,16 +10,17 @@ import mimetypes
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from datetime import datetime
 
+
+# Get configurations from Streamlit secrets
+MONGO_URI = st.secrets["MONGO_URI"]
+PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+PINECONE_ENV = st.secrets["PINECONE_ENV"]
+INDEX_NAME = st.secrets["INDEX_NAME"]
+EMBEDDING_API_URL = st.secrets["EMBEDDING_API_URL"]
+SHARED_DIR = st.secrets["SHARED_DIR"]
 # MongoDB Configuration
-MONGO_URI = "mongodb+srv://username:*Abc12345@cluster01.jzrj8.mongodb.net/document_db?retryWrites=true&w=majority"
 client = MongoClient(MONGO_URI)
 db = client['document_db']
-
-# Pinecone Configuration
-PINECONE_API_KEY = "pcsk_59QQTa_RCoTDxpa4Cw63eYHYqSkPDBaQAKdJUSW5QTperNNjKjyFT2rvKEeAfew9fM4R6D"
-PINECONE_ENV = "us-east-1"
-INDEX_NAME = "documentdb"
-EMBEDDING_API_URL = "https://nitheshmanimaran.pythonanywhere.com/embed"
 
 # Initialize Pinecone
 pc = Pinecone(
