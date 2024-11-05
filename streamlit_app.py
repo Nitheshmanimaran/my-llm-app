@@ -10,6 +10,7 @@ import mimetypes
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from datetime import datetime
 import tempfile
+import replicate
 
 # Get configurations from Streamlit secrets
 MONGO_URI = st.secrets["MONGO_URI"]
