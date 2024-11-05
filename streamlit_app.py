@@ -349,7 +349,7 @@ def main():
         search_section()
 
 # App title
-st.set_page_config(page_title="🦙💬 Llama 2 Chatbot")
+#st.set_page_config(page_title="🦙💬 Llama 2 Chatbot")
 
 # Replicate Credentials
 with st.sidebar:
