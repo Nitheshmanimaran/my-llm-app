@@ -9,7 +9,7 @@ from pymongo import MongoClient
 import mimetypes
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from datetime import datetime
-
+import tempfile
 
 # Get configurations from Streamlit secrets
 MONGO_URI = st.secrets["MONGO_URI"]
@@ -17,10 +17,14 @@ PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 PINECONE_ENV = st.secrets["PINECONE_ENV"]
 INDEX_NAME = st.secrets["INDEX_NAME"]
 EMBEDDING_API_URL = st.secrets["EMBEDDING_API_URL"]
-SHARED_DIR = st.secrets["SHARED_DIR"]
-# MongoDB Configuration
+#SHARED_DIR = st.secrets["SHARED_DIR"]
+
+# Create a temporary directory for file storage
+SHARED_DIR = os.path.join(tempfile.gettempdir(), 'streamlit_uploads')
+os.makedirs(SHARED_DIR, exist_ok=True)
+
 client = MongoClient(MONGO_URI)
-db = client['document_db']
+db = client[INDEX_NAME]
 
 # Initialize Pinecone
 pc = Pinecone(
@@ -28,9 +32,6 @@ pc = Pinecone(
     ssl_verify=False
 )
 index = pc.Index(INDEX_NAME)
-
-# Define the shared directory path
-SHARED_DIR = "/home/username/projects/RAG Pipeline/RAG Pipeline/rag_automation/data/shared"
 
 def get_embeddings(text_chunks):
     """Get embeddings from the API"""
@@ -172,7 +173,10 @@ def search_section():
     query = st.text_input("Enter your search query (optional)")
     
     if uploaded_file:
-        # Calculate file hash
+        # Create a temporary file path
+        temp_file_path = os.path.join(SHARED_DIR, uploaded_file.name)
+        
+        # Read file content
         file_content = uploaded_file.read()
         file_hash = hashlib.sha256(file_content).hexdigest()
         
@@ -239,104 +243,94 @@ def search_section():
             
             if st.button("Process Document"):
                 try:
-                    # Extract text based on file type
+                    # Save file temporarily
+                    with open(temp_file_path, "wb") as f:
+                        f.write(file_content)
+                    
+                    # Get file type
                     file_type, _ = mimetypes.guess_type(uploaded_file.name)
                     
-                    # Use the same text extraction logic as in DAG
-                    if file_type == 'application/pdf':
-                        from io import BytesIO
-                        from PyPDF2 import PdfReader
-                        pdf = PdfReader(BytesIO(file_content))
-                        text = ""
-                        for page in pdf.pages:
-                            text += page.extract_text() or ""
-                    elif 'text' in file_type:
-                        text = file_content.decode('utf-8', errors='ignore')
-                    elif 'document' in file_type:
-                        import docx2txt
-                        from io import BytesIO
-                        text = docx2txt.process(BytesIO(file_content))
-                    else:
-                        st.error("Unsupported file type")
-                        return
+                    # Extract text
+                    text = extract_text_from_file(file_content, file_type)
                     
-                    # Create chunks using RecursiveCharacterTextSplitter
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=2000,
-                        chunk_overlap=200
-                    )
-                    chunks = text_splitter.split_text(text)
-                    
-                    if chunks:
-                        # Get embeddings
-                        embeddings = get_embeddings(chunks)
+                    if text:
+                        # Create chunks
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=2000,
+                            chunk_overlap=200
+                        )
+                        chunks = text_splitter.split_text(text)
                         
-                        if embeddings and len(embeddings) == len(chunks):
-                            # Store document in MongoDB
-                            collection_name = 'pdfs' if file_type == 'application/pdf' else 'docs' if 'document' in file_type else 'texts'
-                            collection = db[collection_name]
+                        if chunks:
+                            # Get embeddings
+                            embeddings = get_embeddings(chunks)
                             
-                            # Save file to shared directory
-                            file_path = os.path.join(SHARED_DIR, uploaded_file.name)
-                            with open(file_path, "wb") as f:
-                                f.write(file_content)
-                            
-                            # Store in MongoDB
-                            doc = {
-                                'filename': uploaded_file.name,
-                                'hash': file_hash,
-                                'path': file_path,
-                                'chunks': chunks,
-                                'processed_at': datetime.now()
-                            }
-                            collection.insert_one(doc)
-                            
-                            # Store in Pinecone
-                            vectors_to_upsert = []
-                            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                                vector_id = f"{file_hash}_{i}"
-                                metadata = {
-                                    'file_name': uploaded_file.name,
-                                    'file_hash': file_hash,
-                                    'chunk_id': i,
-                                    'chunk_text': chunk,
-                                    'file_type': file_type,
-                                    'processed_at': datetime.now().isoformat()
+                            if embeddings and len(embeddings) == len(chunks):
+                                # Store in MongoDB without file path
+                                collection_name = 'pdfs' if file_type == 'application/pdf' else 'docs' if 'document' in file_type else 'texts'
+                                collection = db[collection_name]
+                                
+                                # Store in MongoDB without permanent file path
+                                doc = {
+                                    'filename': uploaded_file.name,
+                                    'hash': file_hash,
+                                    'chunks': chunks,
+                                    'processed_at': datetime.now()
                                 }
-                                vectors_to_upsert.append((vector_id, embedding, metadata))
+                                collection.insert_one(doc)
+                                
+                                # Store in Pinecone
+                                vectors_to_upsert = []
+                                for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                                    vector_id = f"{file_hash}_{i}"
+                                    metadata = {
+                                        'file_name': uploaded_file.name,
+                                        'file_hash': file_hash,
+                                        'chunk_id': i,
+                                        'chunk_text': chunk,
+                                        'file_type': file_type,
+                                        'processed_at': datetime.now().isoformat()
+                                    }
+                                    vectors_to_upsert.append((vector_id, embedding, metadata))
+                                
+                                # Upsert to Pinecone
+                                batch_size = 100
+                                for i in range(0, len(vectors_to_upsert), batch_size):
+                                    batch = vectors_to_upsert[i:i + batch_size]
+                                    index.upsert(vectors=batch)
+                                
+                                # Record in processed_files
+                                db['processed_files'].insert_one({
+                                    'hash': file_hash,
+                                    'filename': uploaded_file.name,
+                                    'processed_at': datetime.now(),
+                                    'total_chunks': len(chunks)
+                                })
+                                
+                                st.success(f"Successfully processed document")
+                                
+                                # Store embeddings in session state
+                                st.session_state['document_embeddings'] = [
+                                    {
+                                        'id': vid,
+                                        'embedding': emb,
+                                        'metadata': meta
+                                    } for vid, emb, meta in vectors_to_upsert
+                                ]
                             
-                            # Upsert to Pinecone in batches
-                            batch_size = 100
-                            for i in range(0, len(vectors_to_upsert), batch_size):
-                                batch = vectors_to_upsert[i:i + batch_size]
-                                index.upsert(vectors=batch)
-                            
-                            # Record in processed_files
-                            db['processed_files'].insert_one({
-                                'hash': file_hash,
-                                'filename': uploaded_file.name,
-                                'processed_at': datetime.now(),
-                                'total_chunks': len(chunks)
-                            })
-                            
-                            st.success(f"Successfully processed document and stored {len(chunks)} chunks")
-                            
-                            # Store embeddings in session state for later use
-                            st.session_state['new_embeddings'] = [
-                                {
-                                    'id': vid,
-                                    'embedding': emb,
-                                    'metadata': meta
-                                } for vid, emb, meta in vectors_to_upsert
-                            ]
-                            
+                            else:
+                                st.error("Failed to generate embeddings")
                         else:
-                            st.error("Failed to generate embeddings")
+                            st.error("No text chunks created")
                     else:
-                        st.error("No text chunks created")
+                        st.error("Failed to extract text from document")
                         
                 except Exception as e:
                     st.error(f"Error processing document: {str(e)}")
+                finally:
+                    # Clean up temporary file
+                    if os.path.exists(temp_file_path):
+                        os.remove(temp_file_path)
 
     # Query handling will be added in the next phase
     if query:
