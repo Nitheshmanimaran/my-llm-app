@@ -2,3 +2,4 @@ streamlit
 pinecone
 pymongo
 langchain
+PyPDF2
